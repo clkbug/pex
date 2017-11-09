@@ -1,4 +1,8 @@
 `default_nettype none
+
+`define TRUE  1'b1
+`define FALSE 1'b0
+
 // OpCode
 `define OpAUX  6'd0
 `define OpJR   6'd42
@@ -29,11 +33,12 @@
 `define AUXSRA 6'd18
 
 // Stage
-`define StageIF  5'b00001
-`define StageRR  5'b00010
-`define StageEX  5'b00100
-`define StageWB  5'b01000
-`define StageHA  5'b11111
+`define StageIF 5'b00001
+`define StageRR 5'b00010
+`define StageEX 5'b00100
+`define StageMA 5'b01000
+`define StageWB 5'b10000
+`define StageHA 5'b11111
 
 // INST_TYPE
 `define INST_R 2'b00
@@ -59,14 +64,27 @@ module cpu(
   reg [4:0] RREX_regWriteAddr;
   reg RREX_regWriteFlag;
   reg RREX_haltFlag;
+  reg RREX_loadFlag;
+  reg RREX_storeFlag;
 
-  // Pipeline Registers: EX to WB
-  reg [4:0] EXWB_regWriteAddr;
-  reg [31:0] EXWB_regWriteData;
-  reg EXWB_regWriteFlag;
-  reg [31:0] EXWB_npc;
-  reg [31:0] EXWB_out;
-  reg EXWB_haltFlag;
+  // Pipeline Registers: EX to MA
+  reg [4:0] EXMA_regWriteAddr;
+  reg [31:0] EXMA_regWriteData;
+  reg EXMA_regWriteFlag;
+  reg [31:0] EXMA_npc;
+  reg [31:0] EXMA_out;
+  reg EXMA_haltFlag;
+  reg EXMA_loadFlag;
+  reg EXMA_storeFlag;
+  reg [31:0] EXMA_storeData;
+
+  // Pipeline Registers: MA to WB
+  reg [4:0] MAWB_regWriteAddr;
+  reg [31:0] MAWB_regWriteData;
+  reg MAWB_regWriteFlag;
+  reg [31:0] MAWB_npc;
+  reg [31:0] MAWB_out;
+  reg MAWB_haltFlag;
 
   // IF stage
   wire [31:0] IF_instruction;
@@ -80,6 +98,7 @@ module cpu(
   wire [5:0] ID_opcode;
   wire [4:0] ID_regReadAddr1, ID_regReadAddr2, ID_regWriteAddr;
   wire ID_regReadFlag1, ID_regReadFlag2, ID_regWriteFlag;
+  wire ID_loadFlag, ID_storeFlag;
   Decoder decoder(
     .clk(clk),
     .rst(rst),
@@ -91,24 +110,28 @@ module cpu(
     .reg2_flag(ID_regReadFlag2),
     .reg3_flag(ID_regWriteFlag),
     .opcode(ID_opcode),
-    .imm(ID_imm)
+    .imm(ID_imm),
+    .load_flag(ID_loadFlag),
+    .store_flag(ID_storeFlag)
   );
 
+  // RR stage
   wire [31:0] RR_regReadData1, RR_regReadData2;
   Register register(
     .clk(clk),
-    .we(EXWB_regWriteFlag),
+    .we(MAWB_regWriteFlag),
     .r1_addr(ID_regReadAddr1),
     .r1_data(RR_regReadData1),
     .r2_addr(ID_regReadAddr2),
     .r2_data(RR_regReadData2),
-    .w_addr(EXWB_regWriteAddr),
-    .w_data(EXWB_regWriteData)
+    .w_addr(MAWB_regWriteAddr),
+    .w_data(MAWB_regWriteData)
   );
 
+  // EX Stage
   wire [31:0] EX_aluout, EX_npc;
   reg [31:0] out;
-  Alu alu(
+  ALU alu(
     .in1(RREX_in1),
     .in2(RREX_in2),
     .pc(RREX_pc),
@@ -118,20 +141,33 @@ module cpu(
     .npc(EX_npc)
   );
 
+  // MA Stage
+  wire [31:0] MA_memReadData;
+  DCache dCache(
+    .clk(clk),
+    .r_addr(EX_aluout),
+    .r_data(MA_memReadData),
+    .we(EXMA_storeFlag),
+    .w_addr(EXMA_out),
+    .w_data(EXMA_storeData)
+  );
+
   always @(posedge clk or negedge rst) begin
     if (~rst) begin
       stage <= `StageIF;
-      EXWB_regWriteFlag <= 1'b0;
+      MAWB_regWriteFlag <= `FALSE;
+      EXMA_storeFlag <= `FALSE;
       pc <= 32'd0;
       $display("RST!");
     end else begin
       case (stage)
         `StageIF: begin
+          MAWB_regWriteFlag <= `FALSE;
           IFRR_pc <= pc;
           IFRR_instruction <= IF_instruction;
           stage <= `StageRR;
-          $display("StageIF, pc = %d, ID_regReadAddr = (%d, %d), ID_opcode = %d, ID_imm = %d", pc, ID_regReadAddr1, ID_regReadAddr2, ID_opcode, ID_imm);
-          $display("INST = %b", IF_instruction);
+          //$display("StageIF, pc = %d, ID_regReadAddr = (%d, %d), ID_opcode = %d, ID_imm = %d", pc, ID_regReadAddr1, ID_regReadAddr2, ID_opcode, ID_imm);
+          //$display("INST = %b", IF_instruction);
         end
         `StageRR: begin
           RREX_pc <= IFRR_pc;
@@ -141,42 +177,64 @@ module cpu(
           RREX_in2 <= RR_regReadData2;
           RREX_regWriteAddr <= ID_regWriteAddr;
           RREX_regWriteFlag <= ID_regWriteFlag;
+          RREX_loadFlag <= ID_loadFlag;
+          RREX_storeFlag <= ID_storeFlag;
           
           if (ID_opcode == `OpHALT) begin
-            RREX_haltFlag = 1'b1;
+            RREX_haltFlag = `TRUE;
           end else begin
-            RREX_haltFlag = 1'b0;
+            RREX_haltFlag = `FALSE;
           end
           stage <= `StageEX;          
-          $display("StageRR, rRD1 = %d, rRD2 = %d", RR_regReadData1, RR_regReadData2);
-          $display("\tIDRR_regReadAddr1 = %d(%d)", ID_regReadAddr1, ID_regReadFlag1);
-          $display("\tIDRR_regReadAddr2 = %d(%d)", ID_regReadAddr2, ID_regReadFlag2);
-          $display("\tRREX_regWriteAddr <= %d", ID_regWriteAddr);
+          //$display("StageRR, rRD1 = %d, rRD2 = %d", RR_regReadData1, RR_regReadData2);
+          //$display("\tIDRR_regReadAddr1 = %d(%d)", ID_regReadAddr1, ID_regReadFlag1);
+          //$display("\tIDRR_regReadAddr2 = %d(%d)", ID_regReadAddr2, ID_regReadFlag2);
+          //$display("\tRREX_regWriteAddr <= %d", ID_regWriteAddr);
         end
         `StageEX: begin
-          EXWB_out <= EX_aluout;
-          EXWB_regWriteData <= EX_aluout;
-          EXWB_npc <= EX_npc;
-          EXWB_regWriteAddr <= RREX_regWriteAddr;
-          EXWB_regWriteFlag <= RREX_regWriteFlag;
-          EXWB_haltFlag <= RREX_haltFlag;
-          pc <= EX_npc;
+          EXMA_out <= EX_aluout;
+          EXMA_regWriteData <= EX_aluout;
+          EXMA_npc <= EX_npc;
+          EXMA_regWriteAddr <= RREX_regWriteAddr;
+          EXMA_regWriteFlag <= RREX_regWriteFlag;
+          EXMA_haltFlag <= RREX_haltFlag;
+          EXMA_storeData <= RREX_in2;
+          EXMA_loadFlag <= RREX_loadFlag;
+          EXMA_storeFlag <= RREX_storeFlag;
+          stage <= `StageMA;
+          //$display("StageEX, aluout = %d, npc = %d", EX_aluout, EX_npc);
+          //$display("\tALU opcode = %d, aux = %d(%d), in1 = %d, in2 = %d", alu.opcode,alu.aux,alu.aux[10:6],alu.in1,alu.in2);
+          //$display("\tRREX_regWriteAddr = %d, Flag = %d, Data = %d", RREX_regWriteAddr, RREX_regWriteFlag, EX_aluout);
+        end
+        `StageMA: begin
+          MAWB_regWriteAddr <= EXMA_regWriteAddr;
+          if (EXMA_loadFlag) begin
+            //$display("\tMA_memReadData = %d", MA_memReadData);
+            MAWB_regWriteData <= MA_memReadData;
+          end else begin
+            MAWB_regWriteData <= EXMA_regWriteData;
+          end
+          MAWB_regWriteFlag <= EXMA_regWriteFlag;
+          MAWB_out <= EXMA_out;
+          MAWB_haltFlag <= EXMA_haltFlag;
+          pc <= EXMA_npc;
+          //$display("StageMA, loadFlag = %b, storeFlag = %b", EXMA_loadFlag, EXMA_storeFlag);
+          //$display("\tEXMA_regWriteData = %d", EXMA_regWriteData); 
           stage <= `StageWB;
-          $display("StageEX, aluout = %d, npc = %d", EX_aluout, EX_npc);
-          $display("\tALU opcode = %d, aux = %d, in1 = %d, in2 = %d", alu.opcode,alu.aux,alu.in1,alu.in2);
-          $display("\tRREX_regWriteAddr = %d, Flag = %d, Data = %d", RREX_regWriteAddr, RREX_regWriteFlag, EXWB_regWriteData);
         end
         `StageWB: begin
-          EXWB_regWriteFlag <= 1'b0;
-          if (RREX_haltFlag) begin
+          EXMA_storeFlag <= `FALSE;
+          if (MAWB_haltFlag) begin
             stage <= `StageHA;
           end else begin
             stage <= `StageIF;
           end
-          $display("StageWB, NPC = %d", EXWB_npc);
+          //$display("StageWB, NPC = %d", pc);
+          //$display("\tWB_DATA = %d", MAWB_regWriteData);
         end
         `StageHA: begin
           $display("StageHA");
+          $display("dcache[532] = %d", dCache.mem[32'd133]);
           $finish;
         end
       endcase
@@ -197,13 +255,14 @@ module ICache(clk, r_addr, r_data);
   assign r_data = mem[addr];
 
   initial begin
-    $readmemb("sample/count.bin", mem);
+    //$readmemb("sample/eratosthenes.bin", mem);
+    $readmemb("sample/montecarlo.bin", mem);
   end
 
 endmodule
 
 
-module Alu(
+module ALU(
   input [31:0] in1, in2,
   input [5:0] opcode,
   input [31:0] imm,
@@ -214,96 +273,110 @@ module Alu(
 
   reg [31:0] out, npc;
 
-  wire [10:0] aux = imm[10:0];
+  wire [10:0] aux;
+  assign aux = imm[10:0];
   
   always @* begin
     case (opcode)
       `OpAUX: begin // Type R
-        case (aux)
-          `AUXADD: // ADD
-            out <= in1 + in2;
-          `AUXSUB: // SUB
-            out <= in1 - in2;
-          `AUXAND: // AND
-            out <= in1 & in2;
-          `AUXOR: // OR
-            out <= in1 | in2;
-          `AUXXOR: // XOR
-            out <= in1 ^ in2;
-          `AUXNOR: // NOR
-            out <= ~(in1 | in2);
-          `AUXSLL: // SLL
-            out <= in1 << aux[10:6];
-          `AUXSRL: // SRL
-            out <= in1 >> aux[10:6];
-          `AUXSRA: // SRA
-            out <= in1 >>> aux[10:6];  // maybe incorrect
+        case (aux[5:0])
+          `AUXADD: begin
+            out = in1 + in2;
+          end
+          `AUXSUB: begin
+            out = in1 - in2;
+          end
+          `AUXAND: begin
+            out = in1 & in2;
+          end
+          `AUXOR: begin
+            out = in1 | in2;
+          end
+          `AUXXOR: begin
+            out = in1 ^ in2;
+          end
+          `AUXNOR: begin
+            out = ~(in1 | in2);
+          end
+          `AUXSLL: begin
+            out = in1 << aux[10:6];
+          end
+          `AUXSRL: begin
+            out = in1 >> aux[10:6];
+          end
+          `AUXSRA: begin
+            out = $signed({1'b0, in1}) >>> aux[10:6];
+          end
+          default: begin
+            out = 32'd0;
+          end
+
         endcase
-        npc <= pc + 4;
+        npc = pc + 4;
       end
 
       `OpADDI: begin  // ADDI
-        out <= in1 + imm;
-        npc <= pc + 4;
+        out = in1 + imm;
+        npc = pc + 4;
       end
       `OpLUI: begin // LUI
-        out <= imm << 16;
-        npc <= pc + 4;
+        out = imm << 16;
+        npc = pc + 4;
       end
       `OpANDI: begin // ANDI
-        out <= in1 & imm;
-        npc <= pc + 4;
+        out = in1 & imm;
+        npc = pc + 4;
       end
       `OpORI: begin // ORI
-        out <= in1 | imm;
-        npc <= pc + 4;
+        out = in1 | imm;
+        npc = pc + 4;
       end
       `OpXORI: begin // XORI
-        out <= in1 ^ imm;
-        npc <= pc + 4;
+        out = in1 ^ imm;
+        npc = pc + 4;
       end
       `OpLW: begin // LW
-        out <= in1 + imm;
-        npc <= pc + 4;
+        out = in1 + imm;
+        npc = pc + 4;
       end
       `OpSW: begin // SW
-        out <= in1 + imm;
-        npc <= pc + 4;
+        out = in1 + imm;
+        npc = pc + 4;
       end
       `OpBEQ: begin // BEQ
         if (in1 == in2) begin
-          npc <= pc + 4 + imm;
+          npc = pc + 4 + imm;
         end else begin
-          npc <= pc + 4;
+          npc = pc + 4;
         end
       end
       `OpBNE: begin // BNE
         if (in1 != in2) begin
-          npc <= pc + 4 + imm;
+          npc = pc + 4 + imm;
         end else begin
-          npc <= pc + 4;
+          npc = pc + 4;
         end
       end
       `OpBLT: begin // BLT
         if (in1 < in2) begin
-          npc <= pc + 4 + imm;
+          npc = pc + 4 + imm;
         end else begin
-          npc <= pc + 4;
+          npc = pc + 4;
         end
       end
       `OpBLE: begin // BLE
         if (in1 <= in2) begin
-          npc <= pc + 4 + imm;
+          npc = pc + 4 + imm;
         end else begin
-          npc <= pc + 4;
+          npc = pc + 4;
         end
       end
       `OpJ:  begin // J
-        npc <= imm;
+        npc = imm;
       end
       `OpJAL: begin // JAL
-        out <= pc;
-        npc <= imm;
+        out = pc;
+        npc = imm;
       end
     endcase
   end
@@ -327,15 +400,20 @@ module Register(clk, we, r1_addr, r1_data, r2_addr, r2_data, w_addr, w_data);
 
   integer i;
   initial begin
-    //for (i = 0; i < 32; i += 1) begin
-    //  mem[i] <= i;
-    //end
   end
   always @(posedge clk) begin
-    //$display("!!!!addr_reg1 = %d, r1_addr = %d", addr_reg1, r1_addr);
-    for (i = 0; i < 10; i += 1) begin
-      $display("mem[%d] = %d", i, mem[i]);
-    end
+//    $display("reg[%d] = %d", 0, mem[0]);
+//    $display("reg[%d] = %d", 1, mem[1]);
+//    $display("reg[%d] = %d", 2, mem[2]);
+//    $display("reg[%d] = %d", 3, mem[3]);
+//    $display("reg[%d] = %d", 8, mem[8]);
+//    $display("reg[%d] = %d", 9, mem[9]);
+//    $display("reg[%d] = %d", 10, mem[10]);
+//    $display("reg[%d] = %d", 11, mem[11]);
+//    $display("reg[%d] = %d", 14, mem[14]);
+//    $display("reg[%d] = %d", 15, mem[15]);
+//    $display("reg[%d] = %d", 24, mem[24]);
+//    $display("reg[%d] = %d", 25, mem[25]);
   end
 endmodule
 
@@ -345,15 +423,18 @@ module Decoder(
   output [4:0] reg1, reg2, reg3,
   output reg1_flag, reg2_flag, reg3_flag,
   output [5:0] opcode,
-  output [31:0] imm
+  output [31:0] imm,
+  output load_flag, store_flag
 );
 
   reg [4:0] reg1, reg2, reg3;
   reg reg1_flag, reg2_flag, reg3_flag;
   reg [31:0] imm;
   wire [4:0] rs, rt, rd;
+  wire [10:0] aux;
 
   assign opcode = instruction[31:26];
+  assign aux = instruction[10:0];
   assign rs = instruction[25:21];
   assign rt = instruction[20:16];
   assign rd = instruction[15:11];
@@ -363,48 +444,88 @@ module Decoder(
     (opcode == `OpAUX || opcode == `OpJR) ? `INST_R :
     (opcode == `OpJ || opcode == `OpJAL || opcode == `OpHALT) ? `INST_A :
     `INST_I;
-  
+
+  assign load_flag = (opcode == `OpLW) ? `TRUE : `FALSE;
+  assign store_flag = (opcode == `OpSW) ? `TRUE : `FALSE;
 
   always @(*) begin
     case (inst_type)
       `INST_R: begin
-        if (opcode != `OpJR) begin
-          imm = {21'b0, instruction[10:0]};
+        if (opcode == `OpJR) begin
+          reg1 = rs;
+          reg1_flag = `TRUE;
+          reg2_flag = `FALSE;
+          reg3_flag = `FALSE;
+        end else begin
           reg1 = rs;
           reg2 = rt;
           reg3 = rd;
-          reg1_flag = 1;
-          reg2_flag = 1;
-          reg3_flag = 1;
-        end else begin // OpJR
-          reg1 = rs;
-          reg1_flag = 1;
-          reg2_flag = 0;
-          reg3_flag = 0;
+          reg1_flag = `TRUE;
+          reg2_flag = `TRUE;
+          reg3_flag = `TRUE;
+          imm = {21'b0, instruction[10:0]};
         end
       end
         
       `INST_I: begin
-        imm = {16'b0, instruction[15:0]};
-        reg1 = rs;
-        reg3 = rt;
-        reg1_flag = 1;
-        reg2_flag = 0;
-        reg3_flag = 1;
+        case (opcode)
+          `OpADDI, `OpLUI, `OpANDI, `OpORI, `OpXORI, `OpLW: begin
+            reg1 = rs;
+            reg3 = rt;
+            reg1_flag = `TRUE;
+            reg2_flag = `FALSE;
+            reg3_flag = `TRUE;
+          end
+          `OpSW, `OpBEQ, `OpBNE, `OpBLT, `OpBLE: begin
+            reg1 = rs;
+            reg2 = rt;
+            reg1_flag = `TRUE;
+            reg2_flag = `TRUE;
+            reg3_flag = `FALSE;
+          end
+        endcase
+
+        case (opcode)
+          `OpLUI, `OpANDI, `OpXORI: begin
+            imm = {16'b0, instruction[15:0]};
+          end
+          default: begin
+            imm = {{16{instruction[15]}}, instruction[15:0]};
+          end
+        endcase
       end
       
       `INST_A: begin
-        imm = {6'b0, instruction[25:0]};
-        reg1_flag = 0;
-        reg2_flag = 0;
+        imm = {{6{instruction[25]}}, instruction[25:0]};
+        reg1_flag = `FALSE;
+        reg2_flag = `FALSE;
         if (opcode == `OpJAL) begin
           reg3 = 5'd31;
-          reg3_flag = 1;
+          reg3_flag = `TRUE;
         end else begin
-          reg3_flag = 0;
+          reg3_flag = `FALSE;
         end
         
       end
     endcase
   end  
+endmodule
+
+module DCache(
+  input clk,
+  input  [31:0] r_addr,
+  output [31:0] r_data,
+  input         we,
+  input  [31:0] w_addr,
+  input  [31:0] w_data
+);
+  reg [31:0] rAddr;
+  reg [31:0] mem [0:1023];
+  always @(posedge clk) begin
+      rAddr <= {2'b0, r_addr[31:2]}; // ignore the lowest 2 bits
+      if (we) mem[{2'b0, w_addr[31:2]}] <= w_data;
+      //$display("dcache[520] = %d", mem[32'd130]);
+      //$display("dcache[532] = %d", mem[32'd133]);
+  end
+  assign r_data = mem[rAddr];
 endmodule

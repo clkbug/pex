@@ -31,7 +31,7 @@ module testbench();
     wait_posedge_clk(2);
     rst <= 1'b1;
     wait_posedge_clk(10);
-    wait_posedge_clk(100);
+    wait_posedge_clk(10000000000);
     $finish;    
   end
 
