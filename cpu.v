@@ -229,7 +229,7 @@ module cpu(
           end else begin
             stage <= `StageIF;
           end
-          //$display("StageWB, NPC = %d", pc);
+          $display("StageWB, NPC = %d", pc);
           //$display("\tWB_DATA = %d", MAWB_regWriteData);
         end
         `StageHA: begin
@@ -250,12 +250,12 @@ module ICache(clk, r_addr, r_data);
   reg [31:0] addr;
   reg [31:0] mem [0:1023];
   always @(posedge clk) begin
-      addr <= {2'b0, r_addr[31:2]}; // ignore the lowest 2 bits
+    addr <= {2'b0, r_addr[31:2]}; // ignore the lowest 2 bits
   end
   assign r_data = mem[addr];
 
   initial begin
-    //$readmemb("sample/eratosthenes.bin", mem);
+    //$readmemb("sample/all.bin", mem);
     $readmemb("sample/montecarlo.bin", mem);
   end
 
@@ -375,8 +375,11 @@ module ALU(
         npc = imm;
       end
       `OpJAL: begin // JAL
-        out = pc;
+        out = pc + 4;
         npc = imm;
+      end
+      `OpJR: begin // JR
+        npc = in1;
       end
     endcase
   end
@@ -391,16 +394,16 @@ module Register(clk, we, r1_addr, r1_data, r2_addr, r2_data, w_addr, w_data);
   reg [4:0] addr_reg1, addr_reg2;
   reg [31:0] mem [0:31];
   always @(posedge clk) begin
-      if(we) mem[w_addr] <= w_data; //書き込みのタイミングを同期
-      addr_reg1 <= r1_addr;         //読み出しアドレスを同期
-      addr_reg2 <= r2_addr;
+    if(we) begin
+      mem[w_addr] <= w_data; //書き込みのタイミングを同期
+      /*if(w_addr == 5'd17)*/ $display("reg[%d] <= %d", w_addr, w_data);
+    end
+    addr_reg1 <= r1_addr;         //読み出しアドレスを同期
+    addr_reg2 <= r2_addr;
   end
   assign r1_data = addr_reg1 == 5'b0 ? 32'b0 : mem[addr_reg1];
   assign r2_data = addr_reg2 == 5'b0 ? 32'b0 : mem[addr_reg2];
 
-  integer i;
-  initial begin
-  end
   always @(posedge clk) begin
 //    $display("reg[%d] = %d", 0, mem[0]);
 //    $display("reg[%d] = %d", 1, mem[1]);
@@ -486,7 +489,7 @@ module Decoder(
         endcase
 
         case (opcode)
-          `OpLUI, `OpANDI, `OpXORI: begin
+          `OpLUI, `OpANDI, `OpORI, `OpXORI: begin
             imm = {16'b0, instruction[15:0]};
           end
           default: begin
@@ -520,7 +523,7 @@ module DCache(
   input  [31:0] w_data
 );
   reg [31:0] rAddr;
-  reg [31:0] mem [0:1023];
+  reg [31:0] mem [0:4095];
   always @(posedge clk) begin
       rAddr <= {2'b0, r_addr[31:2]}; // ignore the lowest 2 bits
       if (we) mem[{2'b0, w_addr[31:2]}] <= w_data;
