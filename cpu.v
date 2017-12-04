@@ -166,8 +166,6 @@ module cpu(
           IFRR_pc <= pc;
           IFRR_instruction <= IF_instruction;
           stage <= `StageRR;
-          //$display("StageIF, pc = %d, ID_regReadAddr = (%d, %d), ID_opcode = %d, ID_imm = %d", pc, ID_regReadAddr1, ID_regReadAddr2, ID_opcode, ID_imm);
-          //$display("INST = %b", IF_instruction);
         end
         `StageRR: begin
           RREX_pc <= IFRR_pc;
@@ -186,10 +184,6 @@ module cpu(
             RREX_haltFlag = `FALSE;
           end
           stage <= `StageEX;          
-          //$display("StageRR, rRD1 = %d, rRD2 = %d", RR_regReadData1, RR_regReadData2);
-          //$display("\tIDRR_regReadAddr1 = %d(%d)", ID_regReadAddr1, ID_regReadFlag1);
-          //$display("\tIDRR_regReadAddr2 = %d(%d)", ID_regReadAddr2, ID_regReadFlag2);
-          //$display("\tRREX_regWriteAddr <= %d", ID_regWriteAddr);
         end
         `StageEX: begin
           EXMA_out <= EX_aluout;
@@ -202,14 +196,10 @@ module cpu(
           EXMA_loadFlag <= RREX_loadFlag;
           EXMA_storeFlag <= RREX_storeFlag;
           stage <= `StageMA;
-          //$display("StageEX, aluout = %d, npc = %d", EX_aluout, EX_npc);
-          //$display("\tALU opcode = %d, aux = %d(%d), in1 = %d, in2 = %d", alu.opcode,alu.aux,alu.aux[10:6],alu.in1,alu.in2);
-          //$display("\tRREX_regWriteAddr = %d, Flag = %d, Data = %d", RREX_regWriteAddr, RREX_regWriteFlag, EX_aluout);
         end
         `StageMA: begin
           MAWB_regWriteAddr <= EXMA_regWriteAddr;
           if (EXMA_loadFlag) begin
-            //$display("\tMA_memReadData = %d", MA_memReadData);
             MAWB_regWriteData <= MA_memReadData;
           end else begin
             MAWB_regWriteData <= EXMA_regWriteData;
@@ -218,8 +208,6 @@ module cpu(
           MAWB_out <= EXMA_out;
           MAWB_haltFlag <= EXMA_haltFlag;
           pc <= EXMA_npc;
-          //$display("StageMA, loadFlag = %b, storeFlag = %b", EXMA_loadFlag, EXMA_storeFlag);
-          //$display("\tEXMA_regWriteData = %d", EXMA_regWriteData); 
           stage <= `StageWB;
         end
         `StageWB: begin
@@ -229,12 +217,8 @@ module cpu(
           end else begin
             stage <= `StageIF;
           end
-          $display("StageWB, NPC = %d", pc);
-          //$display("\tWB_DATA = %d", MAWB_regWriteData);
         end
         `StageHA: begin
-          $display("StageHA");
-          $display("dcache[532] = %d", dCache.mem[32'd133]);
           $finish;
         end
       endcase
@@ -396,28 +380,12 @@ module Register(clk, we, r1_addr, r1_data, r2_addr, r2_data, w_addr, w_data);
   always @(posedge clk) begin
     if(we) begin
       mem[w_addr] <= w_data; //書き込みのタイミングを同期
-      /*if(w_addr == 5'd17)*/ $display("reg[%d] <= %d", w_addr, w_data);
     end
     addr_reg1 <= r1_addr;         //読み出しアドレスを同期
     addr_reg2 <= r2_addr;
   end
   assign r1_data = addr_reg1 == 5'b0 ? 32'b0 : mem[addr_reg1];
   assign r2_data = addr_reg2 == 5'b0 ? 32'b0 : mem[addr_reg2];
-
-  always @(posedge clk) begin
-//    $display("reg[%d] = %d", 0, mem[0]);
-//    $display("reg[%d] = %d", 1, mem[1]);
-//    $display("reg[%d] = %d", 2, mem[2]);
-//    $display("reg[%d] = %d", 3, mem[3]);
-//    $display("reg[%d] = %d", 8, mem[8]);
-//    $display("reg[%d] = %d", 9, mem[9]);
-//    $display("reg[%d] = %d", 10, mem[10]);
-//    $display("reg[%d] = %d", 11, mem[11]);
-//    $display("reg[%d] = %d", 14, mem[14]);
-//    $display("reg[%d] = %d", 15, mem[15]);
-//    $display("reg[%d] = %d", 24, mem[24]);
-//    $display("reg[%d] = %d", 25, mem[25]);
-  end
 endmodule
 
 module Decoder(
@@ -527,8 +495,6 @@ module DCache(
   always @(posedge clk) begin
       rAddr <= {2'b0, r_addr[31:2]}; // ignore the lowest 2 bits
       if (we) mem[{2'b0, w_addr[31:2]}] <= w_data;
-      //$display("dcache[520] = %d", mem[32'd130]);
-      //$display("dcache[532] = %d", mem[32'd133]);
   end
   assign r_data = mem[rAddr];
 endmodule
